@@ -11,6 +11,7 @@
 #include <LightGBM/utils/text_reader.h>
 #include <LightGBM/utils/threading.h>
 #include <LightGBM/parser_base.h>
+#include <LightGBM/category_feature_encoder.hpp>
 
 #include <algorithm>
 #include <memory>
@@ -28,280 +29,6 @@ using json11::Json;
 // transform categorical features to encoded numerical values before the bin construction process
 class CategoryEncodingProvider {
  public:
-  class CatConverter {
-   protected:
-    std::unordered_map<int, int> cat_fid_to_convert_fid_;
-
-   public:
-    virtual ~CatConverter() {}
-
-    virtual double CalcValue(const double sum_label, const double sum_count,
-      const double all_fold_sum_count, const double prior) const = 0;
-
-    virtual double CalcValue(const double sum_label, const double sum_count,
-      const double all_fold_sum_count) const = 0;
-
-    virtual std::string DumpToString() const = 0;
-
-    virtual json11::Json DumpToJSONObject() const = 0;
-
-    virtual std::string FeatureName() const = 0;
-
-    virtual void SetPrior(const double /*prior*/, const double /*prior_weight*/) {}
-
-    void SetCatFidToConvertFid(const std::unordered_map<int, int>& cat_fid_to_convert_fid) {
-      cat_fid_to_convert_fid_ = cat_fid_to_convert_fid;
-    }
-
-    void RegisterConvertFid(const int cat_fid, const int convert_fid) {
-      cat_fid_to_convert_fid_[cat_fid] = convert_fid;
-    }
-
-    int GetConvertFid(const int cat_fid) const {
-      return cat_fid_to_convert_fid_.at(cat_fid);
-    }
-
-    static CatConverter* CreateFromCharPointer(const char* char_pointer, size_t* used_len, double prior_weight) {
-      const char* char_pointer_start = char_pointer;
-      size_t line_len = Common::GetLine(char_pointer);
-      std::string line(char_pointer, line_len);
-      char_pointer += line_len;
-      char_pointer = Common::SkipNewLine(char_pointer);
-      CatConverter* ret = nullptr;
-      if (Common::StartsWith(line, "type=")) {
-        std::string type = Common::Split(line.c_str(), "=")[1];
-
-        if (type == std::string("target_encoder") || type == std::string("target_encoder_label_mean")) {
-          line_len = Common::GetLine(char_pointer);
-          line = std::string(char_pointer, line_len);
-          char_pointer += line_len;
-          char_pointer = Common::SkipNewLine(char_pointer);
-          if (!Common::StartsWith(line.c_str(), "prior=")) {
-            Log::Fatal("CatConverter model format error");
-          }
-          double prior = 0.0f;
-          Common::Atof(Common::Split(line.c_str(), "=")[1].c_str(), &prior);
-          if (type == std::string("target_encoder")) {
-            ret = new TargetEncoder(prior);
-          } else {
-            ret = new TargetEncoderLabelMean();
-          }
-          ret->SetPrior(prior, prior_weight);
-        } else if (type == std::string("count_encoder")) {
-          ret = new CountEncoder();
-        } else {
-          Log::Fatal("Unknown CatConverter type %s", type.c_str());
-        }
-
-        line_len = Common::GetLine(char_pointer);
-        line = std::string(char_pointer, line_len);
-        char_pointer += line_len;
-        char_pointer = Common::SkipNewLine(char_pointer);
-        if (!Common::StartsWith(line.c_str(), "categorical_feature_index_to_encoded_feature_index=")) {
-          Log::Fatal("CatConverter model format error");
-        }
-        std::vector<std::string> feature_index_pair = Common::Split(Common::Split(line.c_str(), "=")[1].c_str(), " ");
-        ret->cat_fid_to_convert_fid_.clear();
-        for (auto& pair_string : feature_index_pair) {
-          std::vector<std::string> cat_fid_and_convert_fid_string = Common::Split(pair_string.c_str(), ":");
-          int cat_fid = 0;
-          Common::Atoi(cat_fid_and_convert_fid_string[0].c_str(), &cat_fid);
-          int convert_fid = 0;
-          Common::Atoi(cat_fid_and_convert_fid_string[1].c_str(), &convert_fid);
-          ret->cat_fid_to_convert_fid_[cat_fid] = convert_fid;
-        }
-        *used_len = static_cast<size_t>(char_pointer - char_pointer_start);
-      } else {
-        Log::Fatal("CatConverter model format error");
-      }
-      return ret;
-    }
-  };
-
-  class TargetEncoder: public CatConverter {
-   public:
-    explicit TargetEncoder(const double prior): prior_(prior) {}
-
-    inline double CalcValue(const double sum_label, const double sum_count,
-      const double /*all_fold_sum_count*/) const override {
-      return (sum_label + prior_ * prior_weight_) / (sum_count + prior_weight_);
-    }
-
-    inline double CalcValue(const double sum_label, const double sum_count,
-      const double /*all_fold_sum_count*/, const double /*prior*/) const override {
-      return (sum_label + prior_ * prior_weight_) / (sum_count + prior_weight_);
-    }
-
-    void SetPrior(const double /*prior*/, const double prior_weight) override {
-      prior_weight_ = prior_weight;
-    }
-
-    std::string FeatureName() const override {
-      std::stringstream str_stream;
-      Common::C_stringstream(str_stream);
-      str_stream << "target_encoding_" << prior_;
-      return str_stream.str();
-    }
-
-    json11::Json DumpToJSONObject() const override {
-      json11::Json::array cat_fid_to_convert_fid_array;
-      for (const auto& pair : cat_fid_to_convert_fid_) {
-        cat_fid_to_convert_fid_array.emplace_back(
-          json11::Json::object{
-            {"cat_fid", json11::Json(pair.first)},
-            {"convert_fid", json11::Json(pair.second)
-          }
-        });
-      }
-
-      json11::Json ret(json11::Json::object {
-        {"name", json11::Json("target_encoder")},
-        {"prior", json11::Json(prior_)},
-        {"categorical_feature_index_to_encoded_feature_index", json11::Json(cat_fid_to_convert_fid_array)}
-      });
-      return ret;
-    }
-
-    std::string DumpToString() const override {
-      std::stringstream str_stream;
-      Common::C_stringstream(str_stream);
-      str_stream << "type=target_encoder\n";
-      str_stream << "prior=" << prior_ << "\n";
-      str_stream << "categorical_feature_index_to_encoded_feature_index=" <<
-        #if ((defined(sun) || defined(__sun)) && (defined(__SVR4) || defined(__svr4__)))
-        CommonLegacy::UnorderedMapToString<false, false, int, int>(cat_fid_to_convert_fid_, ':', ' ') << "\n";
-        #else
-        CommonC::UnorderedMapToString<false, false, int, int>(cat_fid_to_convert_fid_, ':', ' ') << "\n";
-        #endif  // ((defined(sun) || defined(__sun)) && (defined(__SVR4) || defined(__svr4__)))
-      return str_stream.str();
-    }
-
-   private:
-    const double prior_;
-    double prior_weight_;
-  };
-
-  class CountEncoder: public CatConverter {
-   public:
-    CountEncoder() {}
-
-    inline double CalcValue(const double /*sum_label*/, const double /*sum_count*/,
-      const double all_fold_sum_count) const override {
-      return all_fold_sum_count;
-    }
-
-    inline double CalcValue(const double /*sum_label*/, const double /*sum_count*/,
-      const double all_fold_sum_count, const double /*prior*/) const override {
-      return all_fold_sum_count;
-    }
-
-    std::string FeatureName() const override {
-      return std::string("count_encoding");
-    }
-
-    json11::Json DumpToJSONObject() const override {
-      json11::Json::array cat_fid_to_convert_fid_array;
-      for (const auto& pair : cat_fid_to_convert_fid_) {
-        cat_fid_to_convert_fid_array.emplace_back(
-          json11::Json::object{
-            {"cat_fid", json11::Json(pair.first)},
-            {"convert_fid", json11::Json(pair.second)
-          }
-        });
-      }
-
-      json11::Json ret(json11::Json::object {
-        {"name", json11::Json("count_encoder")},
-        {"categorical_feature_index_to_encoded_feature_index", json11::Json(cat_fid_to_convert_fid_array)}
-      });
-      return ret;
-    }
-
-    std::string DumpToString() const override {
-      std::stringstream str_stream;
-      Common::C_stringstream(str_stream);
-      str_stream << "type=count_encoder\n";
-      str_stream << "categorical_feature_index_to_encoded_feature_index=" <<
-        #if ((defined(sun) || defined(__sun)) && (defined(__SVR4) || defined(__svr4__)))
-        CommonLegacy::UnorderedMapToString<false, false, int, int>(cat_fid_to_convert_fid_, ':', ' ') << "\n";
-        #else
-        CommonC::UnorderedMapToString<false, false, int, int>(cat_fid_to_convert_fid_, ':', ' ') << "\n";
-        #endif  // ((defined(sun) || defined(__sun)) && (defined(__SVR4) || defined(__svr4__)))
-      return str_stream.str();
-    }
-  };
-
-  class TargetEncoderLabelMean: public CatConverter {
-   public:
-    TargetEncoderLabelMean() { prior_set_ = false; }
-
-    void SetPrior(const double prior, const double prior_weight) override {
-      prior_ = prior;
-      prior_weight_ = prior_weight;
-      prior_set_ = true;
-    }
-
-    inline double CalcValue(const double sum_label, const double sum_count,
-      const double /*all_fold_sum_count*/) const override {
-      if (!prior_set_) {
-        Log::Fatal("TargetEncoderLabelMean is not ready since the prior value is not set.");
-      }
-      return (sum_label + prior_weight_ * prior_) / (sum_count + prior_weight_);
-    }
-
-    inline double CalcValue(const double sum_label, const double sum_count,
-      const double /*all_fold_sum_count*/, const double prior) const override {
-      if (!prior_set_) {
-        Log::Fatal("TargetEncoderLabelMean is not ready since the prior value is not set.");
-      }
-      return (sum_label + prior * prior_weight_) / (sum_count + prior_weight_);
-    }
-
-    std::string FeatureName() const override {
-      std::stringstream str_stream;
-      Common::C_stringstream(str_stream);
-      str_stream << "label_mean_prior_target_encoding_" << prior_;
-      return str_stream.str();
-    }
-
-    json11::Json DumpToJSONObject() const override {
-      json11::Json::array cat_fid_to_convert_fid_array;
-      for (const auto& pair : cat_fid_to_convert_fid_) {
-        cat_fid_to_convert_fid_array.emplace_back(
-          json11::Json::object{
-            {"cat_fid", json11::Json(pair.first)},
-            {"convert_fid", json11::Json(pair.second)
-          }
-        });
-      }
-
-      json11::Json ret(json11::Json::object {
-        {"name", json11::Json("target_encoder")},
-        {"prior", json11::Json(prior_)},
-        {"categorical_feature_index_to_encoded_feature_index", json11::Json(cat_fid_to_convert_fid_array)}
-      });
-      return ret;
-    }
-
-    std::string DumpToString() const override {
-      std::stringstream str_stream;
-      Common::C_stringstream(str_stream);
-      str_stream << "type=target_encoder_label_mean\n";
-      str_stream << "prior=" << prior_ << "\n";
-      str_stream << "categorical_feature_index_to_encoded_feature_index=" <<
-        #if ((defined(sun) || defined(__sun)) && (defined(__SVR4) || defined(__svr4__)))
-        CommonLegacy::UnorderedMapToString<false, false, int, int>(cat_fid_to_convert_fid_, ':', ' ') << "\n";
-        #else
-        CommonC::UnorderedMapToString<false, false, int, int>(cat_fid_to_convert_fid_, ':', ' ') << "\n";
-        #endif  // ((defined(sun) || defined(__sun)) && (defined(__SVR4) || defined(__svr4__)))
-      return str_stream.str();
-    }
-
-   private:
-    double prior_;
-    double prior_weight_;
-    bool prior_set_;
-  };
 
   ~CategoryEncodingProvider() {
     training_data_fold_id_.clear();
@@ -457,7 +184,7 @@ class CategoryEncodingProvider {
 
   template <bool IS_TRAIN>
   double HandleOneCatConverter(int fid, double fval, int fold_id,
-    const CategoryEncodingProvider::CatConverter* cat_converter) const {
+    const CategoryFeatureEncoder* cat_converter) const {
     double label_sum = 0.0f, total_count = 0.0f, all_fold_total_count = 0.0f;
     GetCategoryEncodingStatForOneCatValue<IS_TRAIN>(fid, fval, fold_id, &label_sum, &total_count, &all_fold_total_count);
     if (IS_TRAIN) {
@@ -475,10 +202,10 @@ class CategoryEncodingProvider {
 
   void ConvertCatToEncodingValues(std::vector<std::pair<int, double>>* features_ptr) const;
 
-  double ConvertCatToEncodingValues(double fval, const CategoryEncodingProvider::CatConverter* cat_converter,
+  double ConvertCatToEncodingValues(double fval, const CategoryFeatureEncoder* cat_converter,
     int col_idx, int line_idx) const;
 
-  double ConvertCatToEncodingValues(double fval, const CategoryEncodingProvider::CatConverter* cat_converter,
+  double ConvertCatToEncodingValues(double fval, const CategoryFeatureEncoder* cat_converter,
     int col_idx) const;
 
   void ExtendFeatureNames(std::vector<std::string>* feature_names_ptr) const;
@@ -643,7 +370,7 @@ class CategoryEncodingProvider {
   // number of data per fold
   std::vector<data_size_t> fold_num_data_;
   // categorical value converters
-  std::vector<std::unique_ptr<CatConverter>> category_encoders_;
+  std::vector<std::unique_ptr<CategoryFeatureEncoder>> category_encoders_;
   // whether the old categorical handling method is used
   bool keep_raw_cat_method_;
 
@@ -695,7 +422,7 @@ class Category_Encoding_CSC_RowIterator: public CSC_RowIterator {
  public:
   Category_Encoding_CSC_RowIterator(const void* col_ptr, int col_ptr_type, const int32_t* indices,
                   const void* data, int data_type, int64_t ncol_ptr, int64_t nelem, int col_idx,
-                  const CategoryEncodingProvider::CatConverter* cat_converter,
+                  const CategoryFeatureEncoder* cat_converter,
                   const CategoryEncodingProvider* category_encoding_provider, bool is_valid, int64_t num_row):
     CSC_RowIterator(col_ptr, col_ptr_type, indices, data, data_type, ncol_ptr, nelem, col_idx),
     col_idx_(col_idx),
@@ -706,7 +433,7 @@ class Category_Encoding_CSC_RowIterator: public CSC_RowIterator {
   }
 
   Category_Encoding_CSC_RowIterator(CSC_RowIterator* csc_iter, const int col_idx,
-                  const CategoryEncodingProvider::CatConverter* cat_converter,
+                  const CategoryFeatureEncoder* cat_converter,
                   const CategoryEncodingProvider* category_encoding_provider, bool is_valid, int64_t num_row):
     CSC_RowIterator(*csc_iter),
     col_idx_(col_idx),
@@ -757,7 +484,7 @@ class Category_Encoding_CSC_RowIterator: public CSC_RowIterator {
   }
 
  private:
-  const CategoryEncodingProvider::CatConverter* cat_converter_;
+  const CategoryFeatureEncoder* cat_converter_;
   const CategoryEncodingProvider* category_encoding_provider_;
   const int col_idx_;
   const bool is_valid_;

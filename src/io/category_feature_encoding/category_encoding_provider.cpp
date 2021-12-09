@@ -4,6 +4,7 @@
   */
 
 #include <LightGBM/category_encoding_provider.hpp>
+#include <LightGBM/category_feature_encoder.hpp>
 
 #include <queue>
 #include <set>
@@ -157,17 +158,17 @@ void CategoryEncodingProvider::SetConfig(const Config* config) {
     for (auto token : Common::Split(config_.category_encoders.c_str(), ',')) {
       if (Common::StartsWith(token, "target")) {
         if (token.size() == target_encoding_string.size()) {
-          category_encoders_.emplace_back(new CategoryEncodingProvider::TargetEncoderLabelMean());
+          category_encoders_.emplace_back(new TargetEncoderLabelMean());
         } else {
           double prior = 0.0f;
           if (token[target_encoding_string.size()] != ':' ||
               !Common::AtofAndCheck(token.c_str() + target_encoding_string.size() + 1, &prior)) {
             Log::Fatal("Target encoding prior of cat_converter specification %s is not a valid float value.", token.c_str());
           }
-          category_encoders_.emplace_back(new CategoryEncodingProvider::TargetEncoder(prior));
+          category_encoders_.emplace_back(new TargetEncoder(prior));
         }
       } else if (token == std::string("count")) {
-        category_encoders_.emplace_back(new CategoryEncodingProvider::CountEncoder());
+        category_encoders_.emplace_back(new CountEncoder());
       } else if (token == std::string("raw")) {
         keep_raw_cat_method_ = true;
       } else {
@@ -406,7 +407,7 @@ CategoryEncodingProvider::CategoryEncodingProvider(const char* str, size_t* used
     str_ptr = Common::SkipNewLine(str_ptr);
 
     size_t category_encoder_used_len = 0;
-    category_encoders_.emplace_back(CatConverter::CreateFromCharPointer(str_ptr, &category_encoder_used_len, prior_weight_));
+    category_encoders_.emplace_back(CategoryFeatureEncoder::CreateFromCharPointer(str_ptr, &category_encoder_used_len, prior_weight_));
     str_ptr += category_encoder_used_len;
     if (used_len != nullptr) {
       *used_len = static_cast<size_t>(str_ptr - str);
@@ -1085,13 +1086,13 @@ void CategoryEncodingProvider::ConvertCatToEncodingValues(std::vector<std::pair<
   }
 }
 
-double CategoryEncodingProvider::ConvertCatToEncodingValues(double fval, const CategoryEncodingProvider::CatConverter* cat_converter,
+double CategoryEncodingProvider::ConvertCatToEncodingValues(double fval, const CategoryFeatureEncoder* cat_converter,
   int col_idx, int line_idx) const {
   const int fold_id = training_data_fold_id_[line_idx];
   return HandleOneCatConverter<true>(col_idx, fval, fold_id, cat_converter);
 }
 
-double CategoryEncodingProvider::ConvertCatToEncodingValues(double fval, const CategoryEncodingProvider::CatConverter* cat_converter,
+double CategoryEncodingProvider::ConvertCatToEncodingValues(double fval, const CategoryFeatureEncoder* cat_converter,
   int col_idx) const {
   return HandleOneCatConverter<false>(col_idx, fval, -1, cat_converter);
 }
