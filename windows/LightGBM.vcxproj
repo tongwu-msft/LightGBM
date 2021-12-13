@@ -305,6 +305,7 @@
     <ClInclude Include="..\src\treelearner\parallel_tree_learner.h" />
     <ClInclude Include="..\src\treelearner\serial_tree_learner.h" />
     <ClInclude Include="..\src\treelearner\split_info.hpp" />
+    <ClInclude Include="..\src\feature_engineering\encoder.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\src\application\application.cpp" />
@@ -322,6 +323,8 @@
     <ClCompile Include="..\src\io\category_feature_encoding\target_label_mean_encoder.cpp" />
     <ClCompile Include="..\src\io\category_feature_encoding\category_feature_encoder.cpp" />
     <ClCompile Include="..\src\io\category_feature_encoding\category_encoding_provider.cpp" />
+    <ClCompile Include="..\src\feature_engineering\category_feature_count_encoder.cpp" />
+    <ClCompile Include="..\src\feature_engineering\category_feature_target_encoder.cpp" />
     <ClCompile Include="..\src\io\dataset.cpp" />
     <ClCompile Include="..\src\io\dataset_loader.cpp" />
     <ClCompile Include="..\src\io\file_io.cpp" />
