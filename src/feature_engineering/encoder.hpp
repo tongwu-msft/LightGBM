@@ -6,6 +6,7 @@
 #define LIGHTGBM_ENCODER_HPP_
 
 #include <LightGBM/utils/json11.h>
+#include <LightGBM/meta.h>
 
 #include <string>
 #include <unordered_map>
@@ -97,13 +98,34 @@ using json11::Json;
     const double default_value = 0.0;
   };
 
-  class TargetCategoryInformationCollector {
+  struct CategoryFeatureTargetInformation {
+    std::unordered_map<int, int> category_count; // <category_id, category_total_count>
+    std::unordered_map<int, double> category_label_sum; // <category_id, label_sum>
+  };
 
+  class CategoryFeatureTargetInformationCollector {
   public:
-    void HandleRecord(int fold_id, int feature_id, int category, double target);
+    CategoryFeatureTargetInformationCollector(bool* is_categorical_feature, int fold_count) {
+      is_categorical_feature_ = is_categorical_feature;
+
+      count_.resize(fold_count);
+      label_sum_.resize(fold_count);
+      category_target_information_.resize(fold_count);
+    }
+
+    void HandleRecord(int fold_id, const std::vector<double>& record, double label);
+
+    std::vector<int, std::unordered_map<int, CategoryFeatureTargetInformation>> GetCategoryTargetInformation() {
+      return category_target_information_;
+    }
 
   private:
-    
+    bool* is_categorical_feature_;
+    std::vector<int, data_size_t> count_; // <fold_id, row_count>
+    std::vector<int, double> label_sum_; // <fold_id, label_sum>
+
+    // <fold_id, <feature_id, CategoryFeatureTargetInformation>>
+    std::vector<int, std::unordered_map<int, CategoryFeatureTargetInformation>> category_target_information_;
   };
 
   class CategoryFeatureEncoderDeserializer {

@@ -325,6 +325,7 @@
     <ClCompile Include="..\src\io\category_feature_encoding\category_encoding_provider.cpp" />
     <ClCompile Include="..\src\feature_engineering\category_feature_count_encoder.cpp" />
     <ClCompile Include="..\src\feature_engineering\category_feature_target_encoder.cpp" />
+    <ClCompile Include="..\src\feature_engineering\category_feature_target_information_collector.cpp" />
     <ClCompile Include="..\src\io\dataset.cpp" />
     <ClCompile Include="..\src\io\dataset_loader.cpp" />
     <ClCompile Include="..\src\io\file_io.cpp" />
